@@ -13,42 +13,69 @@ const uniV2FactoryContract = new ethers.Contract(
 describe("Token Factory", function () {
   let tokenFactory;
 
-  const tokenName = "PopCoin";
-  const tokenSymbol = "POP";
-  const totalSupply = 1000;
-
-  let tokenTxn;
-  let events;
-  let tokenAddr;
-  let token;
-
   before(async function () {
     [owner, addr1, addr2, ...addrs] = await ethers.getSigners();
 
     TokenFactory = await ethers.getContractFactory("TokenFactory");
     tokenFactory = await TokenFactory.deploy(uniV2FactoryAddr, ethAddr);
-
-    tokenTxn = await tokenFactory.deployNewToken(
-      tokenName,
-      tokenSymbol,
-      totalSupply
-    );
-    const txnLogs = await tokenTxn.wait();
-    events = txnLogs.events;
-
-    // Confirm that we are getting the tokenAddress from the right event
-    assert(events[1].event == "TokenCreated");
-    tokenAddr = events[1].args.tokenAddress;
-
-    const Token = await ethers.getContractFactory("Token");
-    token = await Token.attach(tokenAddr);
   });
 
-  describe(`Deploy ${tokenName}`, function () {
-    it(`${tokenName} deployment emits TokenCreated event`, async function () {
+  describe(`Deploy Token`, function () {
+    const tokenName = "PopCoin"; // my dog's name is Popcorn <3
+    const tokenSymbol = "POP";
+    const totalSupply = 1000;
+    const salt = 1;
+
+    let tokenTxn;
+    let events;
+    let tokenAddr;
+    let token;
+
+    it(`${tokenName} deployed at correct CREATE2 address`, async function () {
+      const Token = await ethers.getContractFactory("Token");
+
+      // Use CREATE2 to calculate new token address
+      // constructor arguments are appended to contract bytecode
+      const bytecode = `${Token.bytecode}${encodeParams(
+        ["string", "string", "uint256", "address"],
+        [tokenName, tokenSymbol, totalSupply, owner.address]
+      ).slice(2)}`;
+
+      const computedAddr = buildCreate2Address(
+        tokenFactory.address,
+        numberToUint256(salt),
+        bytecode
+      );
+      expect(await isContract(computedAddr)).to.equal(false); // not yet deployed on-chain
+
+      // Now actually deploy the token contract
+      tokenTxn = await tokenFactory.deployNewToken(
+        tokenName,
+        tokenSymbol,
+        totalSupply,
+        salt
+      );
+      const txnLogs = await tokenTxn.wait();
+      events = txnLogs.events;
+
+      // Confirm that we are getting the tokenAddress from the right event
+      assert(events[1].event == "Deployed");
+      tokenAddr = events[1].args.tokenAddress;
+
+      // attach the deployed contract to the ethers contractFactory abstraction
+      token = await Token.attach(tokenAddr);
+
+      expect(await isContract(computedAddr)).to.equal(true); // now is deployed on-chain
+      // check that the precomputed address matches the actual deployed address
+      expect(ethers.utils.getAddress(computedAddr)).to.equal(
+        ethers.utils.getAddress(tokenAddr)
+      );
+    });
+
+    it(`${tokenName} deployment emits Deployed event with correct arguments`, async function () {
       await expect(tokenTxn)
-        .to.emit(tokenFactory, "TokenCreated")
-        .withArgs(tokenAddr);
+        .to.emit(tokenFactory, "Deployed")
+        .withArgs(tokenAddr, salt);
     });
 
     it(`${tokenName} totalSupply should be ${totalSupply}`, async function () {
@@ -61,61 +88,60 @@ describe("Token Factory", function () {
       );
     });
 
-    // it(`Deployer should transfer 20 tokens to addr1`, async function () {
-    //   token.transfer(addr1.address, 20);
-    //   expect(await token.balanceOf(owner.address)).to.equal(totalSupply - 20);
-    //   expect(await token.balanceOf(addr1.address)).to.equal(20);
-    // });
+    describe(`Create ${tokenName} pair on Uniswap V2`, function () {
+      it(`PairCreated event emitted with correct token contract addresses`, async function () {
+        await expect(tokenTxn).to.emit(uniV2FactoryContract, "PairCreated");
 
-    // it(`Addr1 has 20 tokens and cannot transfer 30`, async function () {
-    //   expect(await token.balanceOf(addr1.address)).to.equal(20);
-    //   await expect(
-    //     token.connect(addr1).transfer(owner.address, 30)
-    //   ).to.be.revertedWith("ERC20: transfer amount exceeds balance");
-    //   // balance of deployer should not change
-    //   expect(await token.balanceOf(owner.address)).to.equal(totalSupply - 20);
-    // });
-  });
-  describe(`Create ${tokenName} pair on Uniswap V2`, function () {
-    it(`PairCreated event emitted with correct token contract addresses`, async function () {
-      await expect(tokenTxn).to.emit(uniV2FactoryContract, "PairCreated");
+        const iface = new ethers.utils.Interface(uniV2FactoryAbi);
+        const pairCreatedLog = iface.decodeEventLog(
+          "PairCreated",
+          events[2].data,
+          events[2].topics
+        );
 
-      const iface = new ethers.utils.Interface(uniV2FactoryAbi);
-      const pairCreatedLog = iface.decodeEventLog(
-        "PairCreated",
-        events[2].data,
-        events[2].topics
-      );
+        let tokens = [ethAddr.toLowerCase(), tokenAddr.toLowerCase()];
+        tokens.sort(); // pair addresses in PairCreated event are ordered
 
-      let tokens = [ethAddr, tokenAddr];
-      tokens.sort();
-
-      expect(ethers.utils.getAddress(pairCreatedLog.token0)).to.equal(
-        ethers.utils.getAddress(tokens[0])
-      );
-      expect(ethers.utils.getAddress(pairCreatedLog.token1)).to.equal(
-        ethers.utils.getAddress(tokens[1])
-      );
-
-      // let something = ethers.utils.solidityKeccak256(
-      //   ["address", "address"],
-      //   [tokens[0], tokens[1]]
-      // );
-      // let hash = ethers.utils.solidityKeccak256(
-      //   ["address", "address", "string", "address"],
-      //   [
-      //     "0xff",
-      //     uniV2FactoryAddr,
-      //     something,
-      //     "0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
-      //   ]
-      // );
-      // console.log(hash);
-      // console.log(typeof hash);
+        expect(ethers.utils.getAddress(pairCreatedLog.token0)).to.equal(
+          ethers.utils.getAddress(tokens[0])
+        );
+        expect(ethers.utils.getAddress(pairCreatedLog.token1)).to.equal(
+          ethers.utils.getAddress(tokens[1])
+        );
+      });
     });
-
-    // it(`Pair contract address matches CREATE2 address`, async function () {
-    //   // const calculatedAddr = ethers.utils.keccak256(["0xff", uniV2FactoryAddr, ])
-    // });
   });
 });
+
+// HELPER FUNCTIONS FOR CREATE2
+
+// deterministically computes the smart contract address given
+// the account the will deploy the contract (factory contract)
+// the salt as uint256 and the contract bytecode
+function buildCreate2Address(creatorAddress, saltHex, byteCode) {
+  return `0x${ethers.utils
+    .keccak256(
+      `0x${["ff", creatorAddress, saltHex, ethers.utils.keccak256(byteCode)]
+        .map((x) => x.replace(/0x/, ""))
+        .join("")}`
+    )
+    .slice(-40)}`.toLowerCase();
+}
+
+// converts an int to uint256
+function numberToUint256(value) {
+  const hex = value.toString(16);
+  return `0x${"0".repeat(64 - hex.length)}${hex}`;
+}
+
+// encodes parameters to pass as contract argument
+function encodeParams(dataTypes, data) {
+  const abiCoder = ethers.utils.defaultAbiCoder;
+  return abiCoder.encode(dataTypes, data);
+}
+
+// returns true if contract is deployed on-chain
+async function isContract(address) {
+  const code = await ethers.provider.getCode(address);
+  return code.slice(2).length > 0;
+}
