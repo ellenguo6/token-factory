@@ -129,12 +129,6 @@ function buildCreate2Address(creatorAddress, saltHex, byteCode) {
     .slice(-40)}`.toLowerCase();
 }
 
-// converts an int to uint256
-function numberToUint256(value) {
-  const hex = value.toString(16);
-  return `0x${"0".repeat(64 - hex.length)}${hex}`;
-}
-
 // encodes parameters to pass as contract argument
 function encodeParams(dataTypes, data) {
   const abiCoder = ethers.utils.defaultAbiCoder;
