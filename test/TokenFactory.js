@@ -24,7 +24,7 @@ describe("Token Factory", function () {
     const tokenName = "PopCoin"; // my dog's name is Popcorn <3
     const tokenSymbol = "POP";
     const totalSupply = 1000;
-    const salt = 1;
+    let salt;
 
     let tokenTxn;
     let events;
@@ -41,9 +41,11 @@ describe("Token Factory", function () {
         [tokenName, tokenSymbol, totalSupply, owner.address]
       ).slice(2)}`;
 
+      salt = getSaltFromName(tokenName);
+
       const computedAddr = buildCreate2Address(
         tokenFactory.address,
-        numberToUint256(salt),
+        salt,
         bytecode
       );
       expect(await isContract(computedAddr)).to.equal(false); // not yet deployed on-chain
@@ -52,8 +54,7 @@ describe("Token Factory", function () {
       tokenTxn = await tokenFactory.deployNewToken(
         tokenName,
         tokenSymbol,
-        totalSupply,
-        salt
+        totalSupply
       );
       const txnLogs = await tokenTxn.wait();
       events = txnLogs.events;
@@ -144,4 +145,10 @@ function encodeParams(dataTypes, data) {
 async function isContract(address) {
   const code = await ethers.provider.getCode(address);
   return code.slice(2).length > 0;
+}
+
+// returns hex string
+function getSaltFromName(name) {
+  const abiCoder = ethers.utils.defaultAbiCoder;
+  return ethers.utils.keccak256(abiCoder.encode(["string"], [name]));
 }

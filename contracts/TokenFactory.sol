@@ -18,10 +18,10 @@ contract TokenFactory {
     function deployNewToken(
         string memory name,
         string memory symbol,
-        uint256 totalSupply,
-        uint256 salt
+        uint256 totalSupply
     ) public {
         bytes memory code = _getBytecode(name, symbol, totalSupply, msg.sender);
+        uint256 salt = uint256(keccak256(abi.encode(name)));
         address addr = _deploy(code, salt);
         _addUniPair(addr);
     }
